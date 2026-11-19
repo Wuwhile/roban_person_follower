@@ -3,11 +3,11 @@
 from collections import deque
 from dataclasses import asdict, dataclass
 import json
+from io import BytesIO
 import math
 import os
 from pathlib import Path
 import signal
-import subprocess
 from time import monotonic, sleep
 import xmlrpc.client
 
@@ -124,6 +124,11 @@ class BodyHub:
     def __init__(self, rospy, journal, timeout=4):
         import rosgraph
         from bodyhub.msg import JointControlPoint
+        from bodyhub.srv import SrvServoAllRead, SrvState, SrvString, SrvTLSstring
+        self.service_types = {
+            'GetMasterID': SrvTLSstring, 'GetStatus': SrvString,
+            'GetJointAngle': SrvServoAllRead, 'StateJump': SrvState,
+        }
         from std_msgs.msg import Bool, Float64, Float64MultiArray, UInt16
 
         self.ros = rospy
@@ -167,25 +172,46 @@ class BodyHub:
         if self.active and getattr(msg, "_connection_header", {}).get("callerid") != self.ros.get_name():
             self.unexpected.append(monotonic())
 
-    def service(self, name, argument):
-        import yaml
-        result = subprocess.run(["rosservice", "call", PREFIX+name, argument],
-                                capture_output=True, text=True, timeout=self.service_timeout)
-        if result.returncode:
-            raise RuntimeError(f"BodyHub {name} failed: {result.stderr.strip()}")
-        reply = yaml.safe_load(result.stdout)
-        if not isinstance(reply, dict):
-            raise RuntimeError(f"Invalid reply for BodyHub {name}")
-        return reply
+    def service(self, name, *arguments):
+        from rospy.impl.tcpros_base import TCPROSTransport, recv_buff
+        from rospy.impl.tcpros_service import TCPROSServiceClient
+        from rospy.core import parse_rosrpc_uri
+
+        resolved = PREFIX+name
+        kind = self.service_types[name]
+        uri = self.master.lookupService(resolved)
+        address, port = parse_rosrpc_uri(uri)
+        protocol = TCPROSServiceClient(resolved, kind)
+        transport = TCPROSTransport(protocol, resolved)
+        try:
+            # Noetic ServiceProxy.receive_once puts its socket in blocking mode.
+            # Read a standard typed response over the same transport with a deadline.
+            transport.connect(address, port, uri, timeout=self.service_timeout)
+            transport.send_message(kind._request_class(*arguments), 1)
+            deadline = monotonic()+self.service_timeout
+            buffer = BytesIO()
+            replies = []
+            while not replies:
+                remaining = deadline-monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(f"BodyHub {name} response timed out")
+                transport.socket.settimeout(remaining)
+                if buffer.tell() >= 4:
+                    protocol.read_messages(buffer, replies, transport.socket)
+                if not replies:
+                    recv_buff(transport.socket, buffer, protocol.buff_size)
+            return replies[0]
+        finally:
+            transport.close()
 
     def state(self):
-        return self.service("GetStatus", "{str: status}")["data"]
+        return self.service("GetStatus", "status").data
 
     def owner(self):
-        return int(self.service("GetMasterID", "{str: status}")["data"])
+        return self.service("GetMasterID", "status").data
 
     def jump(self, motion):
-        self.service("StateJump", "{masterID: %s, stateReq: %s}" % (OWNER, motion))
+        self.service("StateJump", OWNER, motion)
 
     def native_links_ready(self):
         own = self.ros.get_node_uri()
@@ -242,7 +268,7 @@ class BodyHub:
             raise RuntimeError("BodyHub walking state was not confirmed")
         self.hub_state = 28
         # The vendor walking transition samples Present_Position on all servos.
-        measured = self.service("GetJointAngle", "{idArray: [21, 22], idCnt: 2}")["getData"]
+        measured = self.service("GetJointAngle", [21,22], 2).getData
         measured = measured[20:22] if len(measured) >= 22 else measured
         if len(measured) != 2 or not all(math.isfinite(angle) and abs(angle)<=tolerance
                                          for angle in measured):
