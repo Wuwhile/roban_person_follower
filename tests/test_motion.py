@@ -42,7 +42,7 @@ class PolicyTest(unittest.TestCase):
         recent = self.policy.decide(10.4, self.sample(10.4,9), 5)
         self.assertEqual(recent.action, "head")
         center = self.policy.decide(11, self.sample(11,9), 5)
-        self.assertEqual((center.action, center.value), ("head", 0))
+        self.assertEqual((center.action, center.value), ("head", 3))
         turn = self.policy.decide(11.6, self.sample(11.6,14), 0)
         self.assertEqual((turn.action, turn.value), ("turn", 4))
 

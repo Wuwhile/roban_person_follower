@@ -61,6 +61,12 @@ class MotionSession:
             0 <= self.clock()-sample.received <= self.cfg.perception_timeout_s
         )
 
+    def permit_neutral(self):
+        sample, revoked = self.inputs()
+        if revoked or sample is None or not sample.corridor.visible or sample.corridor.blocked:
+            return False
+        return self.policy.decide(self.clock(), sample, self.head).action in ("forward", "turn")
+
     def stop(self, reason):
         self.active = False
         self.report("stopping", reason=reason)
@@ -138,7 +144,7 @@ class MotionSession:
             return
 
         if not self.walking:
-            self.pose_since = self.device.start_walking(self.cfg.neutral_tolerance_deg, self.permit)
+            self.pose_since = self.device.start_walking(self.cfg.neutral_tolerance_deg, self.permit_neutral)
             self.walking = True
             self.wait_since = None
             self.report("armed", "walking_ready")

@@ -21,7 +21,7 @@ class MotionSettings:
     head_yaw_sign: int = 1
     gait_yaw_sign: int = 1
     head_limit_deg: float = 18.0
-    head_step_deg: float = 5.0
+    head_step_deg: float = 2.0
     head_settle_s: float = 0.45
     neutral_tolerance_deg: float = 2.0
     yaw_tolerance_deg: float = 8.0
@@ -186,8 +186,9 @@ class FollowMotion:
             if abs(delta) >= 1:
                 return Intent("head", head_deg+delta)
             return Intent("hold", reason="head_tracking")
-        if not neutral:
-            return Intent("head", 0.0, "recenter_for_gait")
+        if abs(head_deg) >= 1:
+            delta = max(-cfg.head_step_deg, min(cfg.head_step_deg, -head_deg))
+            return Intent("head", head_deg+delta, "recenter_for_gait")
         if side or sample.distance_m > self.far_m + 1e-6:
             if not sample.corridor.visible:
                 return Intent("stop", reason="forward_coverage_lost")
