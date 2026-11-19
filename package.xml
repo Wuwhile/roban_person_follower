@@ -2,7 +2,7 @@
 <package format="2">
   <name>roban_person_follower</name>
   <version>0.1.0</version>
-  <description>RGB-D person tracking and observe-only follow decisions for Roban.</description>
+  <description>RGB-D person tracking and supervised following for Roban.</description>
   <maintainer email="Wuwhile@users.noreply.github.com">Roban Person Follower contributors</maintainer>
   <license>UNLICENSED</license>
 
@@ -12,6 +12,10 @@
   <depend>std_msgs</depend>
   <exec_depend>message_runtime</exec_depend>
   <exec_depend>rospy</exec_depend>
+  <exec_depend>rosgraph</exec_depend>
+  <exec_depend>rosservice</exec_depend>
+  <exec_depend>bodyhub</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
   <exec_depend>message_filters</exec_depend>
   <exec_depend>nodelet</exec_depend>
   <exec_depend>image_proc</exec_depend>

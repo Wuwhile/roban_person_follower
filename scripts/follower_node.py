@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from dataclasses import dataclass, fields
+import json
 from pathlib import Path
 from threading import Event, Lock, Thread
 from time import monotonic
@@ -73,6 +74,7 @@ class FollowerNode:
         self.closed = Event()
         self.pending = None
         self.command_generation = 0
+        self.motion = None
         self.last_image = np.zeros((240, 480, 3), dtype=np.uint8)
         self.last_header = Header()
         self.watchdog = FrameWatchdog(self.settings.frame_timeout_s, monotonic())
@@ -93,10 +95,23 @@ class FollowerNode:
                 )
                 self.sync.registerCallback(self.receive_pair)
                 self.command_sub = rospy.Subscriber("command", String, self.receive_command, queue_size=10)
+                if self.mode == "live":
+                    self.motion_sub = rospy.Subscriber("motion_status", String, self.receive_motion, queue_size=2)
         except Exception:
             self.log.close()
             raise
-        rospy.loginfo("Follower mode=%s with decision output only. Run log: %s", self.mode, self.log.path)
+        rospy.loginfo("Follower perception mode=%s. Run log: %s", self.mode, self.log.path)
+
+    def receive_motion(self, message):
+        try:
+            data = json.loads(message.data)
+            phase = str(data["phase"])
+            action = str(data["action"])
+            reason = str(data["reason"])
+        except (KeyError, TypeError, ValueError):
+            return
+        with self.lock:
+            self.motion = monotonic(), f"{phase} / {action} {reason}".strip()[:83]
 
     def receive_pair(self, rgb, depth):
         pair = FramePair(rgb, depth, monotonic())
@@ -218,6 +233,12 @@ class FollowerNode:
         cv2.rectangle(image, (0, 0), (width, 27), (24, 24, 24), cv2.FILLED)
         cv2.putText(image, label, (8, 19), cv2.FONT_HERSHEY_SIMPLEX,
                     0.5, (235, 235, 235), 1, cv2.LINE_AA)
+        if self.mode == "live":
+            motion = self.motion
+            text = motion[1] if motion and monotonic()-motion[0] < 1 else "motion status unavailable"
+            cv2.rectangle(image, (0, height-26), (width, height), (24, 24, 24), cv2.FILLED)
+            cv2.putText(image, text, (8, height-7), cv2.FONT_HERSHEY_SIMPLEX,
+                        .45, (235, 235, 235), 1, cv2.LINE_AA)
         return Image(
             header=self.last_header, height=height, width=width, encoding="bgr8",
             is_bigendian=0, step=width * 3, data=image.tobytes(),

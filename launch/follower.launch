@@ -2,6 +2,9 @@
   <arg name="mode" default="observe"/>
   <arg name="model_path" default=""/>
   <arg name="log_dir" default=""/>
+  <arg name="enable_motion" default="false"/>
+  <arg name="motion_profile" default="$(find roban_person_follower)/config/motion.yaml"/>
+  <arg name="motion_state_dir" default=""/>
   <arg name="color_image" default="/camera/color/image_raw"/>
   <arg name="color_info" default="/camera/color/camera_info"/>
   <arg name="depth_image" default="/camera/depth/image_rect_raw"/>
@@ -30,6 +33,14 @@
       <rosparam command="load" file="$(find roban_person_follower)/config/follower.yaml"/>
       <param name="mode" type="str" value="$(arg mode)"/>
       <param name="model_path" type="str" value="$(arg model_path)"/>
+      <param name="log_dir" type="str" value="$(arg log_dir)"/>
+    </node>
+    <node if="$(eval arg('mode') == 'live')" pkg="roban_person_follower"
+          type="supervised_motion_node.py" name="motion" output="screen">
+      <rosparam command="load" file="$(find roban_person_follower)/config/follower.yaml"/>
+      <rosparam command="load" file="$(arg motion_profile)"/>
+      <param name="enable_motion" type="bool" value="$(arg enable_motion)"/>
+      <param name="state_dir" type="str" value="$(arg motion_state_dir)"/>
       <param name="log_dir" type="str" value="$(arg log_dir)"/>
     </node>
   </group>

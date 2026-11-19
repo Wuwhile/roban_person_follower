@@ -10,7 +10,7 @@ generate_messages(DEPENDENCIES std_msgs)
 
 catkin_package(CATKIN_DEPENDS message_runtime sensor_msgs std_msgs)
 
-catkin_install_python(PROGRAMS scripts/follower_node.py scripts/download_model.py scripts/summarize_run.py
+catkin_install_python(PROGRAMS scripts/follower_node.py scripts/supervised_motion_node.py scripts/mount_survey.py scripts/download_model.py scripts/summarize_run.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 install(DIRECTORY config launch DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})

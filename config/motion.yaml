@@ -1,0 +1,14 @@
+# Copy this file for the documented on-site calibration.
+field_calibrated: false
+camera_height_m: 0.56
+camera_forward_m: 0.05
+camera_pitch_deg: 10.0
+head_yaw_sign: 1
+gait_yaw_sign: 1
+forward_step_m: 0.02
+turn_step_deg: 4.0
+corridor_half_width_m: 0.23
+coverage_near_m: 0.65
+obstacle_stop_m: 0.95
+obstacle_min_height_m: 0.14
+obstacle_max_height_m: 0.54
