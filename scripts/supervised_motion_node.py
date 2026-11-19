@@ -148,7 +148,8 @@ class MotionNode:
             return sample, self.revoked or ("estop" if self.estop else "")
 
     def notify(self, phase, action, reason, steps):
-        next_status = dict(phase=phase, action=action, reason=reason, steps=steps)
+        next_status = dict(phase=phase, action=action, reason=reason, steps=steps,
+                           hardware_enabled=self.session is not None, field_calibrated=self.calibrated)
         if next_status != self.status:
             self.status = next_status
             self.writer.writerow((rospy.get_time(), monotonic(), phase, action, reason, steps))
@@ -209,7 +210,7 @@ class MotionNode:
                     self.session.tick()
                 elif not self.estop:
                     sample, revoked = self.inputs()
-                    if not revoked and sample and sample.enabled:
+                    if not revoked and (self.status.get("phase") == "shadow" or (sample and sample.enabled)):
                         intent = self.preview.decide(monotonic(), sample, 0.0)
                         self.notify("shadow", intent.action, intent.reason, 0)
                 if monotonic()-self.last_published > .25:
