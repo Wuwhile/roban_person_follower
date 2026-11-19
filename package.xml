@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>roban_person_follower</name>
+  <version>0.1.0</version>
+  <description>RGB-D person tracking and observe-only follow decisions for Roban.</description>
+  <maintainer email="Wuwhile@users.noreply.github.com">Roban Person Follower contributors</maintainer>
+  <license>UNLICENSED</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+  <build_depend>message_generation</build_depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <exec_depend>message_runtime</exec_depend>
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>message_filters</exec_depend>
+  <exec_depend>nodelet</exec_depend>
+  <exec_depend>image_proc</exec_depend>
+  <exec_depend>depth_image_proc</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+</package>

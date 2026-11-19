@@ -1,0 +1,36 @@
+<launch>
+  <arg name="mode" default="observe"/>
+  <arg name="model_path" default=""/>
+  <arg name="log_dir" default=""/>
+  <arg name="color_image" default="/camera/color/image_raw"/>
+  <arg name="color_info" default="/camera/color/camera_info"/>
+  <arg name="depth_image" default="/camera/depth/image_rect_raw"/>
+  <arg name="depth_info" default="/camera/depth/camera_info"/>
+
+  <group ns="person_follower">
+    <node pkg="nodelet" type="nodelet" name="image_manager" args="manager" output="screen"/>
+
+    <node pkg="nodelet" type="nodelet" name="rectify_color"
+          args="load image_proc/rectify image_manager" output="screen">
+      <remap from="image_mono" to="$(arg color_image)"/>
+      <remap from="$(eval arg('color_image').rsplit('/', 1)[0] + '/camera_info')" to="$(arg color_info)"/>
+      <remap from="image_rect" to="rectified_color"/>
+    </node>
+
+    <node pkg="nodelet" type="nodelet" name="register_depth"
+          args="load depth_image_proc/register image_manager" output="screen">
+      <remap from="depth/image_rect" to="$(arg depth_image)"/>
+      <remap from="depth/camera_info" to="$(arg depth_info)"/>
+      <remap from="rgb/camera_info" to="$(arg color_info)"/>
+      <param name="use_rgb_timestamp" value="false"/>
+    </node>
+
+    <node pkg="roban_person_follower" type="follower_node.py" name="follower"
+          output="screen" required="true">
+      <rosparam command="load" file="$(find roban_person_follower)/config/follower.yaml"/>
+      <param name="mode" type="str" value="$(arg mode)"/>
+      <param name="model_path" type="str" value="$(arg model_path)"/>
+      <param name="log_dir" type="str" value="$(arg log_dir)"/>
+    </node>
+  </group>
+</launch>
