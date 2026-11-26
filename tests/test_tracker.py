@@ -5,6 +5,7 @@ import unittest
 import cv2
 import numpy as np
 
+from roban_person_follower.core import DepthCorrection, Follower, Settings
 from roban_person_follower.detector import PersonDetector
 from roban_person_follower.model import MODEL_SHA256, sha256
 from roban_person_follower.tracker import PersonTracker
@@ -21,6 +22,18 @@ class TrackerTest(unittest.TestCase):
         self.assertEqual(first.track_id, continued.track_id)
         self.assertAlmostEqual(continued.distance_m, 1.5)
         self.assertEqual(tracker.update(np.empty((0, 5), dtype=np.float32), depth), [])
+
+    def test_calibrated_distances_drive_hold_forward_and_invalid_stop(self):
+        model = DepthCorrection(1.0, -.168, .70, 1.55)
+        tracker = PersonTracker(0.25, model)
+        follower = Follower(Settings())
+        follower.command("start")
+        detection = np.array([[20, 15, 80, 95, 0.9]], dtype=np.float32)
+        for raw_mm, action, reason in ((1173, "hold", ""), (1450, "forward", ""),
+                                       (1551, "stop", "invalid_depth")):
+            depth = np.full((100, 100), raw_mm, dtype=np.uint16)
+            result = follower.evaluate(tracker.update(detection, depth), 100)
+            self.assertEqual((result.action, result.stop_reason), (action, reason))
 
 
 @unittest.skipUnless(os.environ.get("ROBAN_TEST_MODEL") and os.environ.get("ROBAN_TEST_IMAGE"),

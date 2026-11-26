@@ -1,6 +1,7 @@
 <launch>
   <arg name="mode" default="observe"/>
   <arg name="model_path" default=""/>
+  <arg name="depth_profile" default=""/>
   <arg name="log_dir" default=""/>
   <arg name="enable_motion" default="false"/>
   <arg name="motion_profile" default="$(find roban_person_follower)/config/motion.yaml"/>
@@ -31,6 +32,9 @@
     <node pkg="roban_person_follower" type="follower_node.py" name="follower"
           output="screen" required="true">
       <rosparam command="load" file="$(find roban_person_follower)/config/follower.yaml"/>
+      <rosparam if="$(eval arg('depth_profile') != '')" command="load"
+                file="$(arg depth_profile)" param="depth_correction"/>
+      <param name="depth_correction_enabled" type="bool" value="$(eval arg('depth_profile') != '')"/>
       <param name="mode" type="str" value="$(arg mode)"/>
       <param name="model_path" type="str" value="$(arg model_path)"/>
       <param name="log_dir" type="str" value="$(arg log_dir)"/>

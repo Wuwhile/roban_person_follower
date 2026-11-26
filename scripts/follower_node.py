@@ -12,7 +12,7 @@ import rospy
 from sensor_msgs.msg import Image
 from std_msgs.msg import Header, String
 
-from roban_person_follower.core import Decision, Follower, Settings, usable_distance
+from roban_person_follower.core import Decision, DepthCorrection, Follower, Settings, usable_distance
 from roban_person_follower.detector import PersonDetector
 from roban_person_follower.image import decode_image
 from roban_person_follower.model import default_model_path, ros_data_dir
@@ -62,8 +62,11 @@ class FollowerNode:
         log_dir = Path(rospy.get_param("~log_dir", "") or ros_data_dir() / "logs").expanduser()
 
         cv2.setNumThreads(1)
+        depth_correction = None
+        if rospy.get_param("~depth_correction_enabled", False):
+            depth_correction = DepthCorrection(**rospy.get_param("~depth_correction"))
         self.detector = PersonDetector(model, self.settings.inference_threads)
-        self.tracker = PersonTracker(self.settings.min_depth_coverage)
+        self.tracker = PersonTracker(self.settings.min_depth_coverage, depth_correction)
         self.follower = Follower(self.settings)
         self.target_pub = rospy.Publisher("target", Target, queue_size=1, latch=True)
         self.status_pub = rospy.Publisher("status", Status, queue_size=1, latch=True)

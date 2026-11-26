@@ -3,7 +3,7 @@ import unittest
 
 import numpy as np
 
-from roban_person_follower.core import Follower, Settings, Track, torso_distance
+from roban_person_follower.core import DepthCorrection, Follower, Settings, Track, torso_distance
 from roban_person_follower.image import decode_image
 from roban_person_follower.watchdog import FrameWatchdog
 
@@ -30,6 +30,14 @@ class DistanceTest(unittest.TestCase):
         depth[25:28, 30:70] = 1500
         self.assertIsNone(torso_distance(depth, self.box, 0.25))
         self.assertIsNone(torso_distance(depth, (100, 0, 120, 20), 0.25))
+
+    def test_inverse_depth_model_rejects_values_outside_its_measured_range(self):
+        model = DepthCorrection(1.0, -.168, .70, 1.55)
+        self.assertAlmostEqual(model.correct(1.173), 1.46088854, places=7)
+        for value in (None, float("nan"), .699, 1.551):
+            self.assertIsNone(model.correct(value))
+        with self.assertRaises(ValueError):
+            DepthCorrection(1.0, -.8, .70, 1.55)
 
 
 class DecisionTest(unittest.TestCase):

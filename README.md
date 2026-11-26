@@ -72,6 +72,12 @@ rosrun roban_person_follower mount_survey.py --height 0.64 \
 
 阶段二仅在头部归中并满足深度走廊覆盖时允许步态。障碍判断使用机身前方的三维限域，最近的可见地面和被遮挡区域仍取决于安装位置，请在现场标出软障碍试验范围。
 
+### 人体测距校正
+
+卷尺对照发现系统偏差时，可通过 `depth_profile:=/absolute/path/site-depth.yaml` 为 `observe` 和 `live` 加载同一份现场校正。YAML 字段为 `inverse_scale`、`inverse_offset_per_m`、`raw_min_m` 和 `raw_max_m`。用已知箱面距离、姿态和像素位置换算实际轴向深度，再拟合 `1 / (inverse_scale / raw_m + inverse_offset_per_m)`。上下限来自采样的原始深度范围，需用独立距离和工作俯角的人体样本验证。
+
+校正使用躯干区域的深度中位数，超出校正范围时目标深度无效，控制进入停车状态。原始深度障碍判断的几何与覆盖率仍按现场标定配置分别验证。可先在 `observe` 中核对校正后的距离及决策。
+
 ### 固定行走俯角
 
 现场需要舵机固定俯角时，使用 [BodyHub 保角补丁](deploy/bodyhub-follow-pitch.patch)。补丁基于 Roban 的 `BodyHubNode.cpp`，厂商检出版本为 `d4ed3c089f54d8e7f7e34aff09b398bba4031298`，文件 SHA-256 为 `9d45002f25f0318bfdf6d77f4d204fdd4abc9f90df14c921dbb6c7a393615a0d`。在 BodyHub 包目录内，先用下列命令核对补丁与源文件，再在独立 Catkin 工作空间构建。

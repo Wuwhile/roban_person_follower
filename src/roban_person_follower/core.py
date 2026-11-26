@@ -55,6 +55,28 @@ def usable_distance(distance_m: Optional[float]) -> bool:
     return distance_m is not None and isfinite(distance_m) and distance_m > 0
 
 
+@dataclass(frozen=True)
+class DepthCorrection:
+    inverse_scale: float
+    inverse_offset_per_m: float
+    raw_min_m: float
+    raw_max_m: float
+
+    def __post_init__(self):
+        if not all(type(value) in (int, float) and isfinite(value) for value in vars(self).values()):
+            raise ValueError("Depth correction parameters must be finite numbers")
+        if not 0 < self.raw_min_m < self.raw_max_m or self.inverse_scale <= 0:
+            raise ValueError("Invalid depth correction range or scale")
+        if self.inverse_scale / self.raw_max_m + self.inverse_offset_per_m <= 0:
+            raise ValueError("Depth correction must remain positive throughout its range")
+
+    def correct(self, raw_m: Optional[float]) -> Optional[float]:
+        if not usable_distance(raw_m) or not self.raw_min_m <= raw_m <= self.raw_max_m:
+            return None
+        distance = 1.0 / (self.inverse_scale / raw_m + self.inverse_offset_per_m)
+        return distance if usable_distance(distance) else None
+
+
 def torso_distance(depth: np.ndarray, box: Box, min_coverage: float) -> Optional[float]:
     height, width = depth.shape
     left, top, right, bottom = box
