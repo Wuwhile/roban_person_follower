@@ -22,6 +22,10 @@ EXPECTED_PUBLISHERS = frozenset({
 })
 
 
+class HeadFeedbackRejected(RuntimeError):
+    """BodyHub could not return a physical head reading in this service call."""
+
+
 @dataclass(frozen=True)
 class Process:
     name: str
@@ -176,23 +180,27 @@ class BodyHub:
             self.unexpected.append(monotonic())
 
     def service(self, name, *arguments, timeout=None):
+        from rospy import ServiceException
         from rospy.impl.tcpros_base import TCPROSTransport, recv_buff
         from rospy.impl.tcpros_service import TCPROSServiceClient
         from rospy.core import parse_rosrpc_uri
 
+        bounded_deadline = monotonic() + timeout if timeout is not None else None
         resolved = PREFIX+name
         kind = self.service_types[name]
         uri = self.master.lookupService(resolved)
         address, port = parse_rosrpc_uri(uri)
         protocol = TCPROSServiceClient(resolved, kind)
         transport = TCPROSTransport(protocol, resolved)
-        timeout = self.service_timeout if timeout is None else timeout
+        connect_timeout = self.service_timeout if bounded_deadline is None else bounded_deadline-monotonic()
         try:
             # Noetic ServiceProxy.receive_once puts its socket in blocking mode.
             # Read a standard typed response over the same transport with a deadline.
-            transport.connect(address, port, uri, timeout=timeout)
+            if connect_timeout <= 0:
+                raise TimeoutError(f"BodyHub {name} connection deadline expired")
+            transport.connect(address, port, uri, timeout=connect_timeout)
             transport.send_message(kind._request_class(*arguments), 1)
-            deadline = monotonic()+timeout
+            deadline = bounded_deadline if bounded_deadline is not None else monotonic()+self.service_timeout
             buffer = BytesIO()
             replies = []
             while not replies:
@@ -201,7 +209,12 @@ class BodyHub:
                     raise TimeoutError(f"BodyHub {name} response timed out")
                 transport.socket.settimeout(remaining)
                 if buffer.tell() >= 4:
-                    protocol.read_messages(buffer, replies, transport.socket)
+                    try:
+                        protocol.read_messages(buffer, replies, transport.socket)
+                    except ServiceException as error:
+                        if name == "GetFollowHeadFeedback":
+                            raise HeadFeedbackRejected(str(error)) from error
+                        raise
                 if not replies:
                     recv_buff(transport.socket, buffer, protocol.buff_size)
             return replies[0]
@@ -298,7 +311,7 @@ class BodyHub:
     def confirm_head(self, yaw, tolerance):
         if self.walk_head_pitch_deg:
             tolerance = min(tolerance, 2.0)
-            measured = self.service("GetFollowHeadFeedback", [21, 22], 2, timeout=.18).getData
+            measured = self.follow_head_feedback()
         else:
             stored = self.service("GetJointAngle", [21, 22], 2).getData
             measured = stored[20:22] if len(stored) >= 22 else stored
@@ -306,6 +319,22 @@ class BodyHub:
         if len(measured) != 2 or not all(math.isfinite(actual) and abs(actual-goal) <= tolerance
                                          for actual, goal in zip(measured, expected)):
             raise RuntimeError("BodyHub head pose is outside the walking tolerance")
+
+    def follow_head_feedback(self):
+        deadline = monotonic() + .18
+        for attempt in range(2):
+            try:
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("BodyHub head feedback deadline expired")
+                measured = self.service("GetFollowHeadFeedback", [21, 22], 2, timeout=remaining).getData
+                if monotonic() > deadline:
+                    raise TimeoutError("BodyHub head feedback deadline expired")
+                return measured
+            except HeadFeedbackRejected:
+                if attempt or monotonic() + .02 >= deadline:
+                    raise
+                sleep(.02)
 
     def gait(self, forward, turn, max_age, authorize, lock):
         self.check_exclusive()

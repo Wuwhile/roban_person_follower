@@ -3,10 +3,11 @@ from dataclasses import replace
 from threading import RLock
 from time import monotonic
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 
-from roban_person_follower.bodyhub import OWNER, BodyHub
+from roban_person_follower.bodyhub import OWNER, BodyHub, HeadFeedbackRejected
 from roban_person_follower.motion_policy import Corridor, CorridorCheck, FollowMotion, MotionSettings, Perception
 from roban_person_follower.motion_session import MotionSession
 
@@ -284,6 +285,32 @@ class SessionTest(unittest.TestCase):
         pitch = 13
         self.assertIsNotNone(hub.gait(.02, 0, 1, lambda: True, RLock()))
         self.assertEqual(messages, [{"data": [.02, 0., 0]}])
+
+    def test_head_feedback_retries_rejected_read_with_remaining_budget(self):
+        hub = object.__new__(BodyHub)
+        hub.walk_head_pitch_deg = 13
+        now = 10.0
+        timeouts = []
+
+        def read(name, yaw_and_pitch, count, timeout):
+            nonlocal now
+            timeouts.append(timeout)
+            if len(timeouts) == 1:
+                now += .05
+                raise HeadFeedbackRejected("bus busy")
+            return SimpleNamespace(getData=[0, 13])
+
+        def pause(duration):
+            nonlocal now
+            now += duration
+
+        hub.service = read
+        with patch("roban_person_follower.bodyhub.monotonic", lambda: now), \
+             patch("roban_person_follower.bodyhub.sleep", pause):
+            hub.confirm_head(0, 2)
+        self.assertEqual(len(timeouts), 2)
+        self.assertAlmostEqual(timeouts[0], .18)
+        self.assertAlmostEqual(timeouts[1], .11)
 
 
 if __name__ == "__main__":
