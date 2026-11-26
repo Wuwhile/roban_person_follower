@@ -72,6 +72,18 @@ rosrun roban_person_follower mount_survey.py --height 0.64 \
 
 阶段二仅在头部归中并满足深度走廊覆盖时允许步态。障碍判断使用机身前方的三维限域，最近的可见地面和被遮挡区域仍取决于安装位置，请在现场标出软障碍试验范围。
 
+### 固定行走俯角
+
+现场需要舵机固定俯角时，使用 [BodyHub 保角补丁](deploy/bodyhub-follow-pitch.patch)。补丁基于 Roban 的 `BodyHubNode.cpp`，厂商检出版本为 `d4ed3c089f54d8e7f7e34aff09b398bba4031298`，文件 SHA-256 为 `9d45002f25f0318bfdf6d77f4d204fdd4abc9f90df14c921dbb6c7a393615a0d`。在 BodyHub 包目录内，先用下列命令核对补丁与源文件，再在独立 Catkin 工作空间构建。
+
+```bash
+git apply --check /absolute/path/roban_person_follower/deploy/bodyhub-follow-pitch.patch
+```
+
+把 BodyHub 节点的私有参数 `follow_walk_pitch_deg` 与现场配置的 `walk_head_pitch_deg` 设为同一实测舵机工作角。两项默认均为 `0.0`。`camera_pitch_deg` 是该工作姿态下的光轴俯角，需单独标定。补丁读取俯仰和偏航舵机的实际位置。监督节点等待姿态稳定及新深度，并在进入步态前后和每次发步前核对头部读回。读回失败或超差时退出运动会话。
+
+部署补丁前保留原厂二进制及启动配置。先取走廊空场和软障碍样本，验证工作俯角和进入行走姿态后的视野，再核对人体测距和跟随决策。现场通过后才把 `field_calibrated` 设为 `true`。
+
 ### 启停与验收
 
 在机器人端结束同名观察 launch 后，以现场配置启动受监督 `live`。SSH 断开不应结束监督节点，部署时优先使用现场可持续监控的终端或会话。

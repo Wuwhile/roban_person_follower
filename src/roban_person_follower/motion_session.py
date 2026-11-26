@@ -1,7 +1,8 @@
+from dataclasses import replace
 from time import monotonic
 
 from .bodyhub import OWNER
-from .motion_policy import FollowMotion
+from .motion_policy import Corridor, FollowMotion
 
 
 class MotionSession:
@@ -23,6 +24,8 @@ class MotionSession:
         self.steps = 0
         self.step_since = None
         self.pose_since = 0
+        self.pitch_checked_at = 0
+        self.preparing_pitch = False
         self.wait_since = None
         self.last_audit = 0
 
@@ -34,8 +37,10 @@ class MotionSession:
             return
         now = self.clock()
         sample, revoked = self.inputs()
-        intent = FollowMotion(self.cfg, self.near_m, self.far_m).decide(now, sample, 0.0)
-        if revoked or intent.action == "stop" or not sample.corridor.visible or sample.corridor.blocked:
+        needs_pitch = bool(self.cfg.walk_head_pitch_deg)
+        intent = self.initial_intent(now, sample)
+        if revoked or intent.action == "stop" or (
+                not needs_pitch and (not sample.corridor.visible or sample.corridor.blocked)):
             self.report("standby", reason=intent.reason or "initial_corridor_not_clear")
             return
         self.policy = FollowMotion(self.cfg, self.near_m, self.far_m)
@@ -53,7 +58,28 @@ class MotionSession:
         self.head = 0.0
         self.walking = False
         self.pose_since = self.last_audit = self.clock()
-        self.report("armed")
+        self.pitch_checked_at = 0
+        if needs_pitch:
+            try:
+                self.prepare_pitch()
+            except Exception as error:
+                self.stop(f"head_pitch: {error}")
+        else:
+            self.report("armed")
+
+    def initial_intent(self, now, sample):
+        # Only the head can be commanded until the camera reaches its calibrated pose.
+        if self.cfg.walk_head_pitch_deg and sample is not None:
+            sample = replace(sample, corridor=Corridor(visible=True, blocked=False))
+        return FollowMotion(self.cfg, self.near_m, self.far_m).decide(now, sample, 0.0)
+
+    def prepare_pitch(self):
+        if not self.device.head(0.0, self.permit, self.command_lock):
+            self.stop("head_pitch_revoked")
+            return
+        self.pose_since = self.clock()
+        self.preparing_pitch = True
+        self.report("armed", "head", "setting_walk_pitch")
 
     def permit(self):
         sample, revoked = self.inputs()
@@ -65,10 +91,16 @@ class MotionSession:
         sample, revoked = self.inputs()
         if revoked or sample is None or not sample.corridor.visible or sample.corridor.blocked:
             return False
+        if not self.frame_after_settle(sample):
+            return False
         return self.policy.decide(self.clock(), sample, self.head).action in ("forward", "turn")
+
+    def frame_after_settle(self, sample):
+        return sample.received >= max(self.pose_since + self.cfg.head_settle_s, self.pitch_checked_at)
 
     def stop(self, reason):
         self.active = False
+        self.preparing_pitch = False
         self.report("stopping", reason=reason)
         try:
             self.device.close()
@@ -99,6 +131,23 @@ class MotionSession:
             self.stop("trial_timeout")
             return
 
+        if self.preparing_pitch:
+            intent = self.initial_intent(now, sample)
+            if intent.action == "stop":
+                self.stop(intent.reason)
+            elif now >= self.pose_since + self.cfg.head_settle_s:
+                self.device.confirm_head(0.0, self.cfg.neutral_tolerance_deg)
+                self.pitch_checked_at = self.clock()
+                self.preparing_pitch = False
+                self.report("armed", "head", "walk_pitch_confirmed")
+            return
+
+        if self.pitch_checked_at and sample is not None and sample.received <= self.pitch_checked_at:
+            intent = self.initial_intent(now, sample)
+            if intent.action == "stop":
+                self.stop(intent.reason)
+            return
+
         intent = self.policy.decide(now, sample, self.head)
         if intent.action == "stop":
             self.stop(intent.reason)
@@ -124,7 +173,7 @@ class MotionSession:
                 self.stop("walking_feedback_timeout")
             return
 
-        if sample.received <= self.pose_since or now-self.pose_since < self.cfg.head_settle_s:
+        if not self.frame_after_settle(sample):
             return
         if intent.action in ("head", "hold"):
             self.wait_since = None
@@ -133,7 +182,10 @@ class MotionSession:
                 self.walking = False
                 self.head = 0.0
                 self.pose_since = self.clock()
-                self.report("armed", "hold", "standing")
+                if self.cfg.walk_head_pitch_deg:
+                    self.prepare_pitch()
+                else:
+                    self.report("armed", "hold", "standing")
                 return
             if intent.action == "head":
                 if not self.device.head(intent.value * self.cfg.head_yaw_sign, self.permit, self.command_lock):
@@ -160,8 +212,7 @@ class MotionSession:
 
         def authorize():
             latest, revoked_now = self.inputs()
-            # A neutral, fresh frame must still be present after the hardware check.
-            if revoked_now or latest is None or latest.received <= self.pose_since:
+            if revoked_now or latest is None or not self.frame_after_settle(latest):
                 return False
             if not latest.corridor.visible or latest.corridor.blocked:
                 return False

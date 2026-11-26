@@ -121,13 +121,14 @@ class GaitSources:
 
 
 class BodyHub:
-    def __init__(self, rospy, journal, timeout=4):
+    def __init__(self, rospy, journal, timeout=4, walk_head_pitch_deg=0.0):
         import rosgraph
         from bodyhub.msg import JointControlPoint
         from bodyhub.srv import SrvServoAllRead, SrvState, SrvString, SrvTLSstring
         self.service_types = {
             'GetMasterID': SrvTLSstring, 'GetStatus': SrvString,
-            'GetJointAngle': SrvServoAllRead, 'StateJump': SrvState,
+            'GetJointAngle': SrvServoAllRead, 'GetFollowHeadFeedback': SrvServoAllRead,
+            'StateJump': SrvState,
         }
         from std_msgs.msg import Bool, Float64, Float64MultiArray, UInt16
 
@@ -137,6 +138,8 @@ class BodyHub:
         self.master = rosgraph.Master(rospy.get_name())
         self.sources = GaitSources(self.master, journal)
         self.service_timeout = timeout
+        self.walk_head_pitch_deg = walk_head_pitch_deg
+        self.walk_head_tolerance = None
         self.requests = deque(maxlen=16)
         self.walking = deque(maxlen=64)
         self.unexpected = deque(maxlen=5)
@@ -172,7 +175,7 @@ class BodyHub:
         if self.active and getattr(msg, "_connection_header", {}).get("callerid") != self.ros.get_name():
             self.unexpected.append(monotonic())
 
-    def service(self, name, *arguments):
+    def service(self, name, *arguments, timeout=None):
         from rospy.impl.tcpros_base import TCPROSTransport, recv_buff
         from rospy.impl.tcpros_service import TCPROSServiceClient
         from rospy.core import parse_rosrpc_uri
@@ -183,12 +186,13 @@ class BodyHub:
         address, port = parse_rosrpc_uri(uri)
         protocol = TCPROSServiceClient(resolved, kind)
         transport = TCPROSTransport(protocol, resolved)
+        timeout = self.service_timeout if timeout is None else timeout
         try:
             # Noetic ServiceProxy.receive_once puts its socket in blocking mode.
             # Read a standard typed response over the same transport with a deadline.
-            transport.connect(address, port, uri, timeout=self.service_timeout)
+            transport.connect(address, port, uri, timeout=timeout)
             transport.send_message(kind._request_class(*arguments), 1)
-            deadline = monotonic()+self.service_timeout
+            deadline = monotonic()+timeout
             buffer = BytesIO()
             replies = []
             while not replies:
@@ -224,6 +228,12 @@ class BodyHub:
     def claim(self, permit):
         if (self.owner(), self.state()) != (0, "preReady"):
             raise RuntimeError("BodyHub must be idle and unclaimed")
+        if self.walk_head_pitch_deg:
+            configured = self.ros.get_param(HUB+"/follow_walk_pitch_deg", 0.0)
+            if (type(configured) not in (int, float) or not math.isfinite(configured)
+                    or abs(configured-self.walk_head_pitch_deg) > .05):
+                raise RuntimeError("BodyHub and follower walking pitch must agree")
+            self.master.lookupService(PREFIX+"GetFollowHeadFeedback")
         self.sources.pause()
         self.active = True
         self.unexpected.clear()
@@ -260,6 +270,8 @@ class BodyHub:
         current = self.state()
         if current not in ("ready", "pause") or self.owner() != OWNER:
             raise RuntimeError(f"Cannot enter walking from {current}")
+        if self.walk_head_pitch_deg:
+            self.confirm_head(0.0, tolerance)
         if not permit():
             raise RuntimeError("Motion permission revoked before entering walking")
         since = monotonic()
@@ -267,12 +279,8 @@ class BodyHub:
         if (self.owner(), self.state()) != (OWNER, "walking"):
             raise RuntimeError("BodyHub walking state was not confirmed")
         self.hub_state = 28
-        # The vendor walking transition samples Present_Position on all servos.
-        measured = self.service("GetJointAngle", [21,22], 2).getData
-        measured = measured[20:22] if len(measured) >= 22 else measured
-        if len(measured) != 2 or not all(math.isfinite(angle) and abs(angle)<=tolerance
-                                         for angle in measured):
-            raise RuntimeError("BodyHub head is not neutral after entering walking")
+        self.confirm_head(0.0, tolerance)
+        self.walk_head_tolerance = tolerance
         self.last_request = since
         return monotonic()
 
@@ -283,8 +291,21 @@ class BodyHub:
         with lock:
             if not authorize():
                 return False
-            self.head_pub.publish(self.head_type(positions=[angle, 0.0], mainControlID=OWNER))
+            self.head_pub.publish(self.head_type(positions=[angle, self.walk_head_pitch_deg],
+                                                 mainControlID=OWNER))
         return True
+
+    def confirm_head(self, yaw, tolerance):
+        if self.walk_head_pitch_deg:
+            tolerance = min(tolerance, 2.0)
+            measured = self.service("GetFollowHeadFeedback", [21, 22], 2, timeout=.18).getData
+        else:
+            stored = self.service("GetJointAngle", [21, 22], 2).getData
+            measured = stored[20:22] if len(stored) >= 22 else stored
+        expected = (yaw, self.walk_head_pitch_deg)
+        if len(measured) != 2 or not all(math.isfinite(actual) and abs(actual-goal) <= tolerance
+                                         for actual, goal in zip(measured, expected)):
+            raise RuntimeError("BodyHub head pose is outside the walking tolerance")
 
     def gait(self, forward, turn, max_age, authorize, lock):
         self.check_exclusive()
@@ -293,6 +314,8 @@ class BodyHub:
         stamp = self.requests[-1]
         if stamp <= self.last_request or not 0 <= monotonic()-stamp <= max_age:
             return None
+        if self.walk_head_pitch_deg:
+            self.confirm_head(0.0, self.walk_head_tolerance)
         with lock:
             if not authorize() or monotonic()-stamp > max_age or self.unexpected:
                 return None

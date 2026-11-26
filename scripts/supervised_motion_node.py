@@ -68,7 +68,8 @@ class MotionNode:
             state_dir.mkdir(parents=True, exist_ok=True)
             self.state_guard = (state_dir/"motion.lock").open("a")
             fcntl.flock(self.state_guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            self.device = BodyHub(rospy, state_dir/"motion-gait-journal.json")
+            self.device = BodyHub(rospy, state_dir/"motion-gait-journal.json",
+                                  walk_head_pitch_deg=self.cfg.walk_head_pitch_deg)
             self.session = MotionSession(self.device, self.cfg, self.near, self.far, self.inputs, self.notify, self.lock)
 
         self.preview = FollowMotion(self.cfg, self.near, self.far)

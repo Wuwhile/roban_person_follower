@@ -34,6 +34,7 @@ class MotionSettings:
     step_timeout_s: float = 4.5
     trial_timeout_s: float = 75.0
     camera_lateral_m: float = 0.0
+    walk_head_pitch_deg: float = 0.0
 
     def __post_init__(self):
         if not all(type(value) in (int, float) and isfinite(value) for value in vars(self).values()):
@@ -43,6 +44,7 @@ class MotionSettings:
         if not (0.15 <= self.camera_height_m <= 1.2
                 and -0.20 <= self.camera_forward_m <= 0.30
                 and abs(self.camera_lateral_m) <= 0.10
+                and 0 <= self.walk_head_pitch_deg <= 20
                 and -15 <= self.camera_pitch_deg <= 45
                 and 0.12 <= self.corridor_half_width_m <= 0.45
                 and 0.35 <= self.coverage_near_m < self.obstacle_stop_m < 1.3

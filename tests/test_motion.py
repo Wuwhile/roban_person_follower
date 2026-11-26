@@ -1,6 +1,8 @@
 import unittest
 from dataclasses import replace
 from threading import RLock
+from time import monotonic
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -74,6 +76,7 @@ class MockDevice:
         self.before_gait = lambda: None
         self.stop_error = False
         self.current_owner = OWNER
+        self.head_error = False
 
     def claim(self, permit):
         if not permit():
@@ -98,6 +101,11 @@ class MockDevice:
             raise RuntimeError("permit")
         self.trace.append("walking_ready")
         return self.clock()
+
+    def confirm_head(self, yaw, tolerance):
+        if self.head_error:
+            raise RuntimeError("head feedback unavailable")
+        self.trace.append("head_confirmed")
 
     def gait(self, forward, turn, max_age, authorize, lock):
         self.before_gait()
@@ -153,6 +161,57 @@ class SessionTest(unittest.TestCase):
         self.tick(.2)
         self.assertEqual(self.history[-1], ("standby","none","single_step_complete",1))
 
+    def test_depth_during_pose_settle_cannot_authorize_walking_or_step(self):
+        self.session.arm(once=True)
+        self.tick(.1)
+        self.now += .36
+        self.session.tick()
+        self.assertNotIn("walking_ready", self.device.trace)
+        self.assertFalse(self.session.permit_neutral())
+        self.tick(.05)
+        self.assertIn("walking_ready", self.device.trace)
+
+        self.tick(.1)
+        self.now += .36
+        self.session.tick()
+        self.assertEqual(self.gears(), [])
+        self.tick(.05)
+        self.assertEqual(self.gears(), [("gait", .02, 0)])
+
+    def test_older_frame_after_hardware_check_cannot_authorize_step(self):
+        self.entered_walking()
+
+        def receive_old_frame():
+            self.sample = replace(self.sample, received=self.session.pose_since + .1)
+
+        self.device.before_gait = receive_old_frame
+        self.tick(.5)
+        self.assertEqual(self.gears(), [])
+
+    def test_nonzero_pitch_requires_feedback_and_new_clear_depth(self):
+        self.session.cfg = replace(self.cfg, walk_head_pitch_deg=13)
+        self.sample = replace(self.sample, corridor=Corridor(False, False))
+        self.session.arm(once=True)
+        self.assertEqual(self.device.trace, ["claim", ("head", 0.0)])
+        self.tick(.5)
+        self.assertIn("head_confirmed", self.device.trace)
+        self.now += .1
+        self.session.tick()
+        self.assertNotIn("walking_ready", self.device.trace)
+        self.tick(.05, corridor=Corridor(True, False))
+        self.assertIn("walking_ready", self.device.trace)
+        self.assertEqual(self.gears(), [])
+        self.tick(.5)
+        self.assertEqual(self.gears(), [("gait", .02, 0)])
+
+    def test_unconfirmed_pitch_stops_before_entering_walking(self):
+        self.session.cfg = replace(self.cfg, walk_head_pitch_deg=13)
+        self.device.head_error = True
+        self.session.arm(once=True)
+        self.tick(.5)
+        self.assertEqual(self.device.trace, ["claim", ("head", 0.0), "stop"])
+        self.assertIn("head feedback unavailable", self.history[-1][2])
+
     def test_timeout_sends_no_gait(self):
         self.device.request = False
         self.entered_walking()
@@ -198,6 +257,33 @@ class SessionTest(unittest.TestCase):
         self.assertFalse(hub.gait_finished(10))
         hub.walking.append((10.04,False))
         self.assertTrue(hub.gait_finished(10))
+
+    def test_pitch_drift_in_hardware_feedback_blocks_gait(self):
+        hub = object.__new__(BodyHub)
+        hub.walk_head_pitch_deg = 13
+        hub.walk_head_tolerance = 2
+        hub.hub_state = 28
+        hub.requests = [monotonic()]
+        hub.last_request = 0
+        hub.unexpected = []
+        hub.check_exclusive = lambda: None
+        messages = []
+        hub.gait_pub = SimpleNamespace(publish=messages.append)
+        hub.gait_type = lambda **fields: fields
+        pitch = 0
+
+        def read(name, *arguments, timeout):
+            self.assertEqual((name, arguments), ("GetFollowHeadFeedback", ([21, 22], 2)))
+            self.assertLess(timeout, .2)
+            return SimpleNamespace(getData=[0, pitch])
+
+        hub.service = read
+        with self.assertRaisesRegex(RuntimeError, "outside the walking tolerance"):
+            hub.gait(.02, 0, 1, lambda: True, RLock())
+        self.assertEqual(messages, [])
+        pitch = 13
+        self.assertIsNotNone(hub.gait(.02, 0, 1, lambda: True, RLock()))
+        self.assertEqual(messages, [{"data": [.02, 0., 0]}])
 
 
 if __name__ == "__main__":

@@ -1,0 +1,125 @@
+--- a/src/BodyHubNode.cpp
++++ b/src/BodyHubNode.cpp
+@@ -4,6 +4,8 @@
+ #include "std_msgs/String.h"
+ #include "std_msgs/Int8.h"
+ 
++#include <cmath>
++
+ #define TO_INT16(a, b)                             \
+   ((int16_t)(((uint8_t)(((uint64_t)(a)) & 0xff)) | \
+              ((uint16_t)((uint8_t)(((uint64_t)(b)) & 0xff))) << 8))
+@@ -37,6 +39,12 @@
+ uint8_t dxlIds[DXL_ID_COUNT_MAX];
+ uint8_t numberOfId = 0;
+ uint8_t currentControlId = 0;
++static constexpr uint8_t kFollowOwnerId = 47;
++static constexpr double kFollowHeadTolerance = 2.0;
++static double followWalkPitchDeg = 0.0;
++static bool HoldingFollowPitch();
++static ros::ServiceServer followHeadFeedbackService;
++
+ uint8_t bodyhubState = 0;
+ std::string stateNewStr;
+ 
+@@ -1286,7 +1294,8 @@
+ void HeadPositionCallback(const bodyhub::JointControlPoint::ConstPtr &msg) {
+   /* 仅头部舵机数据接收 0_ID19 1_ID20 */
+   if (!mtxFSM.try_lock()) return;
+-  if (currentControlId == msg->mainControlID) {
++  if (currentControlId == msg->mainControlID &&
++      !(HoldingFollowPitch() && bodyhubState == StateEnum::walking)) {
+     bodyhub::JointControlPoint jointControlMsg;
+     jointControlMsg.mainControlID = msg->mainControlID;
+     jointControlMsg.positions = msg->positions;
+@@ -1882,6 +1891,59 @@
+   return true;
+ }
+ 
++static bool HoldingFollowPitch() {
++  return currentControlId == kFollowOwnerId && followWalkPitchDeg != 0.0;
++}
++
++static bool ReadFollowHeadAngles(std::vector<double> &angles) {
++  if (SimControll::simEnable || pthread_mutex_trylock(&mtxOpDxl) != 0)
++    return false;
++  const char *log = NULL;
++  int32_t position[2] = {0, 0};
++  const uint8_t yawId = HEAD_SERVO_ID + 1;
++  const uint8_t pitchId = HEAD_SERVO_ID + 2;
++  const bool read = dxl_wb.readRegister(yawId, "Present_Position", &position[0], &log) &&
++                    dxl_wb.readRegister(pitchId, "Present_Position", &position[1], &log);
++  pthread_mutex_unlock(&mtxOpDxl);
++  if (!read)
++    return false;
++  angles = {convertValueTOAngle(yawId, position[0] - servoOffset[yawId - 1]),
++            convertValueTOAngle(pitchId, position[1] - servoOffset[pitchId - 1])};
++  return std::isfinite(angles[0]) && std::isfinite(angles[1]);
++}
++
++static bool FollowHeadFeedback(bodyhub::SrvServoAllRead::Request &req,
++                               bodyhub::SrvServoAllRead::Response &res) {
++  std::unique_lock<std::mutex> lock(mtxFSM, std::try_to_lock);
++  if (!lock.owns_lock() || !HoldingFollowPitch() || req.idCnt != 2 ||
++      req.idArray.size() != 2 || req.idArray[0] != HEAD_SERVO_ID + 1 ||
++      req.idArray[1] != HEAD_SERVO_ID + 2)
++    return false;
++  if (bodyhubState != StateEnum::ready && bodyhubState != StateEnum::pause &&
++      bodyhubState != StateEnum::running && bodyhubState != StateEnum::walking)
++    return false;
++  return ReadFollowHeadAngles(res.getData);
++}
++
++static bool PrepareFollowWalkingPose() {
++  if (!HoldingFollowPitch())
++    return true;
++  std::vector<double> measured;
++  if (!std::isfinite(followWalkPitchDeg) || followWalkPitchDeg < 0.0 ||
++      followWalkPitchDeg > 20.0 || armMode != 1 || !ReadFollowHeadAngles(measured) ||
++      std::abs(measured[0]) > kFollowHeadTolerance ||
++      std::abs(measured[1] - followWalkPitchDeg) > kFollowHeadTolerance) {
++    ROS_WARN("Follower head pose could not be verified before walking");
++    return false;
++  }
++  pthread_mutex_lock(&mtxMo);
++  ClearQueue(headCtrlQueue);
++  pthread_mutex_unlock(&mtxMo);
++  standPos[HEAD_SERVO_ID] = 0.0;
++  standPos[HEAD_SERVO_ID + 1] = followWalkPitchDeg;
++  return true;
++}
++
+ bool StateSrvCallback(bodyhub::SrvState::Request &req,
+                       bodyhub::SrvState::Response &res) {
+   if (mtxFSM.try_lock()) {
+@@ -1913,8 +1975,8 @@
+           pthread_mutex_unlock(&mtxWl);
+         }
+       } else if (req.stateReq == "walking") {
+-        if ((bodyhubState == StateEnum::ready) ||
+-            (bodyhubState == StateEnum::pause)) {
++        if (((bodyhubState == StateEnum::ready) ||
++             (bodyhubState == StateEnum::pause)) && PrepareFollowWalkingPose()) {
+           UpdateState(StateEnum::walking);
+         }
+       } else if (req.stateReq == "external_control") {
+@@ -2608,6 +2670,9 @@
+                                         MasterIDSrvCallback);
+   GetJointAngleService = nh.advertiseService("MediumSize/BodyHub/GetJointAngle",
+                                              GetJointAngleCallback);
++  if (followWalkPitchDeg != 0.0)
++    followHeadFeedbackService = nh.advertiseService(
++        "MediumSize/BodyHub/GetFollowHeadFeedback", FollowHeadFeedback);
+   ScanServoService =
+       nh.advertiseService("MediumSize/BodyHub/ScanServo", ScanServoSrvCallback);
+   PresentTemperatureService = nh.advertiseService("MediumSize/BodyHub/PresentTemperature",
+@@ -2827,6 +2892,9 @@
+   ros::NodeHandle nodeHandle;
+   signal(SIGINT, sigintHandler);
+ 
++  ros::NodeHandle privateNode("~");
++  privateNode.param("follow_walk_pitch_deg", followWalkPitchDeg, 0.0);
++
+   /* Load ROS Parameter */
+   LoadAssembleParam(nodeHandle);
+   nodeHandle.getParam("setnostand", noRobotStand);

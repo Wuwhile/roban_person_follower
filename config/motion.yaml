@@ -5,6 +5,7 @@ camera_height_m: 0.56
 camera_forward_m: 0.05
 camera_lateral_m: 0.0
 camera_pitch_deg: 10.0
+walk_head_pitch_deg: 0.0
 head_yaw_sign: 1
 gait_yaw_sign: 1
 forward_step_m: 0.02
