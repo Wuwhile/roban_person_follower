@@ -33,6 +33,7 @@ class MotionSettings:
     request_max_age_s: float = 0.30
     step_timeout_s: float = 4.5
     trial_timeout_s: float = 75.0
+    camera_lateral_m: float = 0.0
 
     def __post_init__(self):
         if not all(type(value) in (int, float) and isfinite(value) for value in vars(self).values()):
@@ -41,6 +42,7 @@ class MotionSettings:
             raise ValueError("Yaw signs must be -1 or 1")
         if not (0.15 <= self.camera_height_m <= 1.2
                 and -0.20 <= self.camera_forward_m <= 0.30
+                and abs(self.camera_lateral_m) <= 0.10
                 and -15 <= self.camera_pitch_deg <= 45
                 and 0.12 <= self.corridor_half_width_m <= 0.45
                 and 0.35 <= self.coverage_near_m < self.obstacle_stop_m < 1.3
@@ -99,7 +101,7 @@ class CorridorCheck:
                         if optical_z <= 0:
                             return None
                         for lateral in (left, right):
-                            u = self.cx+self.fx*lateral/optical_z
+                            u = self.cx+self.fx*(lateral-cfg.camera_lateral_m)/optical_z
                             v = self.cy+self.fy*optical_y/optical_z
                             if not (self.stride <= u < self.width-self.stride
                                     and self.stride <= v < self.height-self.stride):
@@ -119,9 +121,9 @@ class CorridorCheck:
             d *= .001
         valid = np.isfinite(d) & (d >= .175)
         safe_depth = np.where(valid, d, 0)
-        lateral = self.ray_x * safe_depth
         down = self.ray_y * safe_depth
         cfg = self.settings
+        lateral = cfg.camera_lateral_m + self.ray_x * safe_depth
         forward = cfg.camera_forward_m + self.cosine*safe_depth - self.sine*down
         height = cfg.camera_height_m - self.sine*safe_depth - self.cosine*down
         blocked = valid & (abs(lateral) <= cfg.corridor_half_width_m) & (forward > 0)

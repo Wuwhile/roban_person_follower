@@ -29,6 +29,15 @@ class CorridorTest(unittest.TestCase):
         self.assertEqual(check.measure(np.full((480,640), 2500, dtype=np.uint16)),
                          Corridor(False, False))
 
+    def test_lateral_camera_offset_places_obstacle_relative_to_torso(self):
+        frame = np.full((480,640), 2100, dtype=np.uint16)
+        frame[196:248, 488:512] = 740
+        projection = [600,0,320,0,0,600,240,0,0,0,1,0]
+        cfg = MotionSettings(camera_pitch_deg=22, camera_lateral_m=.06)
+        check = CorridorCheck(cfg, projection, 640, 480)
+        self.assertEqual(self.check.measure(frame), Corridor(True, True))
+        self.assertEqual(check.measure(frame), Corridor(True, False))
+
 
 class PolicyTest(unittest.TestCase):
     def setUp(self):

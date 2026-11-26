@@ -37,6 +37,9 @@
     </node>
     <node if="$(eval arg('mode') == 'live')" pkg="roban_person_follower"
           type="supervised_motion_node.py" name="motion" output="screen">
+      <remap from="obstacle_depth_image" to="$(arg depth_image)"/>
+      <remap from="obstacle_depth_info" to="$(arg depth_info)"/>
+      <remap from="obstacle_color_info" to="$(arg color_info)"/>
       <rosparam command="load" file="$(find roban_person_follower)/config/follower.yaml"/>
       <rosparam command="load" file="$(arg motion_profile)"/>
       <param name="enable_motion" type="bool" value="$(arg enable_motion)"/>

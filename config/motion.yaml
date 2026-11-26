@@ -1,7 +1,9 @@
 # Copy this file for the documented on-site calibration.
 field_calibrated: false
+obstacle_depth_source: registered
 camera_height_m: 0.56
 camera_forward_m: 0.05
+camera_lateral_m: 0.0
 camera_pitch_deg: 10.0
 head_yaw_sign: 1
 gait_yaw_sign: 1

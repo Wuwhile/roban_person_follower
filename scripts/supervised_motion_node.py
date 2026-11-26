@@ -5,6 +5,7 @@ import csv
 from dataclasses import fields, replace
 from datetime import datetime, timezone
 import json
+from math import isfinite
 from pathlib import Path
 import socket
 import sys
@@ -43,6 +44,10 @@ class MotionNode:
         self.follower_enabled = False
         self.camera = None
         self.camera_key = None
+        self.color_intrinsics = None
+        self.depth_source = rospy.get_param("~obstacle_depth_source", "registered")
+        if self.depth_source not in ("registered", "raw"):
+            raise ValueError("obstacle_depth_source must be registered or raw")
         self.state_guard = None
         state_dir = Path(rospy.get_param("~state_dir", "") or ros_data_dir()).expanduser()
         self.latch_path = state_dir / "estop.latched"
@@ -70,11 +75,17 @@ class MotionNode:
         self.status_sub = rospy.Subscriber("status", Status, self.receive_status, queue_size=5)
         self.command_sub = rospy.Subscriber("command", String, self.receive_follower_command, queue_size=5)
         self.motion_sub = rospy.Subscriber("motion_command", String, self.receive_motion_command, queue_size=5)
-        self.info_sub = rospy.Subscriber("depth_registered/camera_info", CameraInfo, self.receive_info, queue_size=1)
+        if self.depth_source == "raw":
+            self.color_info_sub = rospy.Subscriber("obstacle_color_info", CameraInfo, self.receive_color_info,
+                                                   queue_size=1)
+            depth_info, depth_image = "obstacle_depth_info", "obstacle_depth_image"
+        else:
+            depth_info, depth_image = "depth_registered/camera_info", "depth_registered/image_rect"
+        self.info_sub = rospy.Subscriber(depth_info, CameraInfo, self.receive_info, queue_size=1)
         self.target_sub = message_filters.Subscriber("target", Target, queue_size=3)
-        self.depth_sub = message_filters.Subscriber("depth_registered/image_rect", Image, queue_size=3, buff_size=2**22)
+        self.depth_sub = message_filters.Subscriber(depth_image, Image, queue_size=3, buff_size=2**22)
         self.sync = message_filters.ApproximateTimeSynchronizer(
-            [self.target_sub, self.depth_sub], queue_size=6, slop=Settings().sync_slop_s,
+            [self.target_sub, self.depth_sub], queue_size=12, slop=Settings().sync_slop_s,
         )
         self.sync.registerCallback(self.receive_pair)
         self.notify("estop" if self.estop else "standby", "none", "startup", 0)
@@ -118,6 +129,14 @@ class MotionNode:
             camera = None
         with self.lock:
             self.camera_key, self.camera = key, camera
+            if self.depth_source == "registered":
+                self.receive_color_info(msg)
+
+    def receive_color_info(self, msg):
+        fx, cx = msg.P[0], msg.P[2]
+        usable = msg.header.frame_id and isfinite(fx) and fx > 0 and 0 <= cx < msg.width
+        with self.lock:
+            self.color_intrinsics = (msg.header.frame_id, fx, cx) if usable else None
 
     def receive_pair(self, target, depth):
         stamp = rospy.Time.now()
@@ -127,14 +146,14 @@ class MotionNode:
         if not -Settings().sync_slop_s <= age <= self.cfg.perception_timeout_s:
             return
         with self.lock:
-            camera, key = self.camera, self.camera_key
-        if camera is None or key[0] != target.header.frame_id or key[0] != depth.header.frame_id:
+            camera, key, color = self.camera, self.camera_key, self.color_intrinsics
+        if camera is None or color is None or color[0] != target.header.frame_id or key[0] != depth.header.frame_id:
             return
         try:
             corridor = camera.measure(decode_image(depth))
         except (TypeError, ValueError):
             return
-        bearing = image_bearing(target.bbox_xyxy, camera.fx, camera.cx) if target.valid else None
+        bearing = image_bearing(target.bbox_xyxy, color[1], color[2]) if target.valid else None
         if bearing is not None and not -90 < bearing < 90:
             bearing = None
         distance = target.distance_m if target.distance_valid and usable_distance(target.distance_m) else None
@@ -149,7 +168,8 @@ class MotionNode:
 
     def notify(self, phase, action, reason, steps):
         next_status = dict(phase=phase, action=action, reason=reason, steps=steps,
-                           hardware_enabled=self.session is not None, field_calibrated=self.calibrated)
+                           hardware_enabled=self.session is not None, field_calibrated=self.calibrated,
+                           obstacle_depth_source=self.depth_source)
         if next_status != self.status:
             self.status = next_status
             self.writer.writerow((rospy.get_time(), monotonic(), phase, action, reason, steps))

@@ -57,15 +57,21 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--height", type=float, required=True, help="Measured lens height above level floor in meters")
     parser.add_argument("--namespace", default="/person_follower")
+    parser.add_argument("--depth-image", help="Override the default registered image topic")
+    parser.add_argument("--depth-info", help="CameraInfo for the selected depth image topic")
     args = parser.parse_args(rospy.myargv(argv=sys.argv)[1:])
     if not .15 <= args.height <= 1.2:
         parser.error("Enter the measured lens height in meters")
+    if bool(args.depth_image) != bool(args.depth_info):
+        parser.error("Specify both --depth-image and --depth-info when overriding depth topics")
     ns = args.namespace.rstrip("/")
+    image_topic = args.depth_image or ns+"/depth_registered/image_rect"
+    info_topic = args.depth_info or ns+"/depth_registered/camera_info"
     rospy.init_node("mount_survey", anonymous=True)
-    info = rospy.wait_for_message(ns+"/depth_registered/camera_info", CameraInfo, timeout=5)
+    info = rospy.wait_for_message(info_topic, CameraInfo, timeout=5)
     results = []
     for _ in range(3):
-        msg = rospy.wait_for_message(ns+"/depth_registered/image_rect", Image, timeout=5)
+        msg = rospy.wait_for_message(image_topic, Image, timeout=5)
         if msg.header.frame_id != info.header.frame_id:
             raise RuntimeError("Depth and calibration frame do not match")
         try:

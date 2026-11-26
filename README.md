@@ -63,6 +63,13 @@ ssh -NT -L 127.0.0.1:18080:127.0.0.1:8080 lemon@ROBAN_HOST
 2. 测量镜头离地高度及镜头相对于机身中心向前的偏移。让镜头前的水平地面空净，用 `rosrun roban_person_follower mount_survey.py --height 实测米数` 估算光轴俯角。以多帧一致的地面为准，确认镜头朝向机身正前方。
 3. 复制 `config/motion.yaml` 到现场配置，填写高度、前向偏移、光轴俯角，并用软障碍在机身正前方验证深度覆盖和停车线。确认 `head_yaw_sign`、`gait_yaw_sign` 和保守步幅后，将 `field_calibrated` 设为 `true`。配置示例的尺寸和俯角是预演参数。
 
+当配准到彩色图后的视野裁掉近处障碍走廊时，可在现场配置中设置 `obstacle_depth_source: raw`，用 D435 原始深度和其内参检查走廊。人体距离继续使用配准深度，人体方位使用彩色相机内参。对原始深度重新做安装标定，填写深度镜头相对机身中心的高度、前向偏移及侧向偏移。侧向偏移以机器人右侧为正。
+
+```bash
+rosrun roban_person_follower mount_survey.py --height 0.64 \
+  --depth-image /camera/depth/image_rect_raw --depth-info /camera/depth/camera_info
+```
+
 阶段二仅在头部归中并满足深度走廊覆盖时允许步态。障碍判断使用机身前方的三维限域，最近的可见地面和被遮挡区域仍取决于安装位置，请在现场标出软障碍试验范围。
 
 ### 启停与验收
